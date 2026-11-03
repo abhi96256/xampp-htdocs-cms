@@ -1,0 +1,17 @@
+<IfModule mod_rewrite.c>
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indices
+    </IfModule>
+
+    RewriteEngine On
+
+    # For assets (css, js, images, fonts), route to the public directory
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} \.(css|js|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico|pdf|zip|rar)$ [NC]
+    RewriteRule ^((?!public/).*)$ public/$1 [L,NC]
+
+    # For all other requests (like /account/signin), route to server.php so Laravel handles the path correctly
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule ^(.*)$ server.php [L]
+</IfModule>

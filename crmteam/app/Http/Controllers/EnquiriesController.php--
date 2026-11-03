@@ -1,0 +1,779 @@
+<?php
+
+namespace App\Http\Controllers;
+
+
+use App\Lancer\Utilities;
+use App\Models\BudgetRange;
+use App\Models\Configuration;
+use App\Models\Enquiry;
+use App\Models\EnquiryStatus;
+use App\Models\PaymentMode;
+use App\Models\Project;
+use App\Models\User;
+use Exception;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Auth;
+
+
+class EnquiriesController extends Controller
+{
+    protected $utilities;
+
+    public function __construct(Utilities $utilities)
+    {
+        // For referencing the Utilities class from our blade templates
+        $this->utilities = $utilities;
+    }
+
+    /**
+     * Display a listing of the resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function index(Request $request, $filter=null)
+    {
+        // Reference to the Utilities class
+        $utilities = $this->utilities;
+
+        if($filter === null) {
+            if($request->session()->has('filter')) {
+                $filter = session('filter');
+            }
+        } 
+		
+
+        switch ($filter) {
+            case 'active':
+                session(['filter' => $filter]);
+
+                if(auth()->user()->hasRole(['Admin', 'Telecaller'])) {
+                    $enquiries = Enquiry::where('is_lost', false)->latest()->paginate(20);
+                } else {
+                    $enquiries = Enquiry::where('is_lost', false)->where('assigned_to', auth()->user()->id)->latest()->paginate(20);
+                }
+
+                break;
+
+            case 'lost':
+                session(['filter' => $filter]);
+
+                if(auth()->user()->hasRole(['Admin', 'Telecaller'])) {
+                    $enquiries = Enquiry::where('is_lost', true)->latest()->paginate(20);
+                } else {
+                    $enquiries = Enquiry::where('is_lost', true)->where('assigned_to', auth()->user()->id)->latest()->paginate(20);
+                }
+
+                break;
+
+            default:
+                $filter = 'all';
+                session(['filter' => $filter]);
+
+                if(auth()->user()->hasRole(['Admin', 'Telecaller'])) {
+                    $enquiries = Enquiry::latest()->paginate(20);
+                } else {
+                    $enquiries = Enquiry::where('assigned_to', auth()->user()->id)->latest()->paginate(20);
+                }
+
+                break;
+        }
+		if($request->user_id && $request->status == 'closed'){
+			$enquiries = Enquiry::where([['assigned_to', $request->user_id],['enquiry_status_id', 5]])->latest()->paginate(20);
+		}else if($request->user_id ){
+			$enquiries = Enquiry::where('assigned_to', $request->user_id)->latest()->paginate(20);
+		}
+		if($request->assigned_to){
+			$leads = explode(",",$request->selected_leads);
+			foreach($leads as $l){
+				$enquiry = Enquiry::where('id', $l)->first();
+				$assignee = User::where('id', $request->assigned_to)->first();
+				$enquiry->assignedTo()->associate($assignee);
+				$assignee->update([
+					'no_of_enquiries_assigned' => ($assignee->no_of_enquiries_assigned + 1),
+				]);
+				
+				if($request->assigned_to){
+					$insert_update  = DB::table('notifications')
+					->Insert(
+						['user_id' => $request->assigned_to,'notification_text' => "New Lead has been assigned to you","status"=>0],
+					);
+					
+				}
+				if($request->assigned_to){
+					$insert_update  = DB::table('activities')
+					->Insert(
+						['user' => $request->assigned_to,'activity_text' => "New Lead(s) has been assigned to ".$assignee->name],
+					);
+					
+				}
+
+				$enquiry->save();
+				
+			}
+			$users = User::role(['Team Lead' , 'Executive'])->orderby('no_of_enquiries_assigned', 'ASC')->get();
+				 return redirect(route('enquiries.index', ['enquiries' => $enquiries,
+				 'utilities'=> $utilities, 'filter'=>$filter,'users'=>$users]));
+		}
+		DB::enableQueryLog();
+
+		if($request->daterange ) {
+			//echo $request->daterange;exit;
+			$date = explode(" - ",$request->daterange);
+			 if(auth()->user()->hasRole(['Admin'])) {
+				$enquiries = Enquiry::whereBetween('created_at', [$date[0]." ". date("H:i:s"), $date[1]." ". date("H:i:s")])->latest()->paginate(20);
+			 }else{
+				 $enquiries = Enquiry::whereBetween('created_at', [$date[0].' '. date("H:i:s"), $date[1]." ". date("H:i:s")])->where('assigned_to',auth()->user()->id)->latest()->paginate(20);
+			 }
+        }
+		if($request->advance) {
+			DB::enableQueryLog();
+
+			$data = $request->advance;
+			
+			//$enq = Enquiry::where('name', 'like',  $data['name'] );
+			$where = [];
+			if(!empty($data['name'])){
+				$where[] = ['name','like','%'.$data['name'].'%'];
+			}
+			if(!empty($data['business_name'])){
+				$where[] = ['business_name','like','%'.$data['business_name'].'%'];;
+			}
+			if(!empty($data['email'])){
+				$where[] = ['email','like','%'.$data['email'].'%'];
+			}
+			if(!empty($data['contact_no'])){
+				$where[] = ['contact_no','like','%'.$data['contact_no'].'%'];
+			}
+			if(!empty($data['assigned_to'])){
+				$where['assigned_to'] = $data['assigned_to'];
+			}
+			if(!empty($data['project'])){
+				$where['project_id'] = $data['project'];
+			}
+			if(!empty($data['configuration'])){
+				$where['configuration_id'] = $data['configuration'];
+			}
+			if(!empty($data['budget_range'])){
+				$where['budget_range_id'] = $data['budget_range'];
+			}
+			$enq =Enquiry::where($where );
+			$enquiries = $enq->latest()->paginate(20);
+			//echo "<pre>";print_r(DB::getQueryLog());exit;
+        }
+		//dd(DB::getQueryLog());
+
+		//print_r($enquiries);exit;
+		$users = User::role(['Team Lead' , 'Executive'])->orderby('no_of_enquiries_assigned', 'ASC')->get();
+		$projects = Project::all();
+        $configurations = Configuration::all();
+        $budget_ranges = BudgetRange::all();
+        return view('enquiries.index', compact('enquiries', 'utilities','projects', 'configurations', 'budget_ranges', 'filter','users'));
+    }
+
+    /**
+     * Show the form for creating a new resource.
+     *
+     * @return \Illuminate\Http\Response
+     */
+    public function create()
+    {
+        $enquiry_statuses = EnquiryStatus::paginate(3);
+        $projects = Project::all();
+        $configurations = Configuration::all();
+        $budget_ranges = BudgetRange::all();
+        $users = User::role(['Team Lead' , 'Executive'])->orderby('no_of_enquiries_assigned', 'ASC')->get();
+
+        return view('enquiries.create', compact('enquiry_statuses', 'projects', 'configurations', 'budget_ranges', 'users'));
+    }
+
+    /**
+     * Store a newly created resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\Response
+     */
+    public function store(Request $request)
+    {
+        $this->validate($request, [
+            'name' => 'required',
+            'contact_no' => 'required|regex:/^([0-9\s\-\+\(\)]*)$/|min:6',
+            'enquiry_status' => 'required',
+        ]);
+
+        if ($request->input('email')) {
+            $this->validate($request, [
+                'email' => 'email',
+            ]);
+        }
+
+        DB::beginTransaction();
+		$pre_enq = Enquiry::where('contact_no', $request->input('contact_no'))->first();
+		if($pre_enq){
+			 return redirect()->back()->withErrors([
+                'db_error' => "A Lead has been already created with this Phone number",
+            ]);
+		}
+        try {
+            $enquiry = Enquiry::create([
+                'name' => ucwords($request->input('name')),
+                'business_name' => $request->input('business_name'),
+                'email' => $request->input('email'),
+                'contact_no' => $request->input('contact_no'),
+               // 'subject' => $request->input('subject'),
+                'address' => $request->input('address'),
+            ]);
+
+            $status = EnquiryStatus::where('id', $request->input('enquiry_status'))->first();
+            $enquiry->enquiry_status()->associate($status);
+
+            $project = Project::where('id', $request->input('project'))->first();
+            $enquiry->project()->associate($project);
+
+            $configuration = Configuration::where('id', $request->input('configuration'))->first();
+            $enquiry->configuration()->associate($configuration);
+
+            $budget_range = BudgetRange::where('id', $request->input('budget_range'))->first();
+            $enquiry->budget_range()->associate($budget_range);
+			if($request->input('assigned_to')){
+            $assignee = User::where('id', $request->input('assigned_to'))->first();
+            $enquiry->assignedTo()->associate($assignee);
+            $assignee->update([
+                'no_of_enquiries_assigned' => ($assignee->no_of_enquiries_assigned + 1),
+            ]);
+			
+				$insert_update  = DB::table('notifications')
+				->Insert(
+					['user_id' => $request->input('assigned_to'),'notification_text' => "New Lead has been assigned to you","status"=>0],
+				);
+				$insert_update  = DB::table('leads_transfer')
+				->Insert(
+					['lead_id' => $enquiry->id,'previous_user'=>auth()->user()->id,'new_user'=>$request->input('assigned_to')],
+				);
+				
+			}
+			$insert_update  = DB::table('activities')
+					->Insert(
+						['user' => $request->assigned_to,'activity_text' => "New Lead(s) has been created by ".auth()->user()->name],
+					);
+			if($request->assigned_to){
+					$insert_update  = DB::table('activities')
+					->Insert(
+						['user' => $request->assigned_to,'activity_text' => "New Lead(s) has been assigned to ".$assignee->name,],
+					);
+					
+				}
+			
+			if($request->input('subject')){
+				$insert_update  = DB::table('remarks')
+				->Insert(
+					['user_id' => auth()->user()->id,'lead_id' => $enquiry->id,"remarks"=>$request->input('subject'),'created_by'=>NOW(),'updated_by'=>NOW()],
+				);
+			}
+            $enquiry->save();
+			
+        } catch (Exception $e) {
+            DB::rollBack();
+            return redirect()->back()->withErrors([
+                'db_error' => $e->getMessage(),
+            ]);
+        }
+        DB::commit();
+
+        return redirect(route('enquiries.index'));
+    }
+
+    public function storeFbLead(Request $request)
+    {
+        if($request->isMethod('get')) {
+            $challenge = $request->hub_challenge;
+            $verify_token = $request->hub_verify_token;
+
+            if ($verify_token === env('FB_WEBHOOK_VERIFY_TOKEN')) {
+                echo $challenge;
+            }
+        } else {
+            $input = json_decode($request->getContent());
+
+            $entry = $input->entry[0];
+            // $entry_id = $entry->id;
+            $change = $entry->changes[0]->value;
+
+            // $form_id = $change->form_id;
+            // $page_id = $change->page_id;
+            $leadgen_id = $change->leadgen_id;
+
+            DB::beginTransaction();
+            try {
+                $lead_response = Http::get(Utilities::getLeadDetailsEndpoint($leadgen_id));
+                $lead_data = $lead_response->object();
+                // $created_time = $lead_data->created_time;
+                $field_data = $lead_data->field_data;
+
+                $name = '';
+                $contact_no = '';
+
+                foreach ($field_data as $lead) {
+                    if($lead->name === 'full_name') {
+                        $name = $lead->values[0];
+                    }
+
+                    if($lead->name === 'phone_number') {
+                        $contact_no = $lead->values[0];
+                    }
+                }
+
+                $enquiry = Enquiry::create([
+                    'name' => ucwords($name),
+                    'contact_no' => $contact_no,
+                    'subject' => 'FB Lead',
+                ]);
+
+                $status = EnquiryStatus::where('id', 1)->first();
+                $enquiry->enquiry_status()->associate($status);
+                $enquiry->saveQuietly();
+
+                // Send email to sales team regarding the new lead
+                $data = [
+                    'enquiry' => $enquiry,
+                ];
+                Mail::send('emails.newfblead', $data, function($message) use ($enquiry) {
+                    $message->to(Utilities::SALES_EMAIL, Utilities::SALES_RECEIVER_NAME)->subject('New lead from facebook ad campaign');
+                });
+            } catch (Exception $e) {
+                DB::rollBack();
+                Log::error(print_r($e, true));
+            }
+            DB::commit();
+
+        }
+    }
+
+    public function storePpcLead(Request $request)
+    {
+        $redirectUrl = $request->input('redirect');
+        DB::beginTransaction();
+        try {
+            $enquiry = Enquiry::create([
+                'name' => ucwords($request->input('name')),
+                'contact_no' => $request->input('contact_no'),
+                'subject' => $request->input('subject'),
+            ]);
+
+            $status = EnquiryStatus::where('id', 1)->first();
+            $enquiry->enquiry_status()->associate($status);
+
+            $assignee = User::role(['Team Lead' , 'Executive'])->orderby('no_of_enquiries_assigned', 'ASC')->first();
+            $enquiry->assignedTo()->associate($assignee);
+            $assignee->update([
+                'no_of_enquiries_assigned' => ($assignee->no_of_enquiries_assigned + 1),
+            ]);
+            $enquiry->saveQuietly();
+
+            // Send email to sales team regarding the new lead
+            $data = [
+                'enquiry' => $enquiry,
+            ];
+
+            Mail::send('emails.newppclead', $data, function($message) use ($assignee, $request) {
+                $message->to($assignee->email, $assignee->name)->subject($request->input('subject'));
+            });
+
+        } catch (Exception $e) {
+            DB::rollBack();
+            Log::error(print_r($e, true));
+        }
+        DB::commit();
+
+        return redirect($redirectUrl);
+    }
+
+    /**
+     * Display the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function show($id)
+    {
+        $utilities = $this->utilities;
+        $enquiry = Enquiry::where('id', $id)->first();
+
+        if($enquiry->enquiry_status->id === 4) {
+            return redirect(route('enquiries.index'));
+        }
+
+        $followups = $enquiry->follow_ups;
+        $projects = Project::all();
+        $enquiry_statuses = EnquiryStatus::paginate(3);
+		$remarks = DB::table('remarks')->leftJoin('users', 'remarks.user_id', '=', 'users.id')->where('lead_id',$id)->first();
+		//echo "<pre>";print_r($remarks->remarks);exit;
+        return view('enquiries.show', compact('enquiry', 'followups', 'projects', 'enquiry_statuses', 'utilities','remarks'));
+    }
+	 public function import(Request $request)
+    {
+             return view('enquiries.import');
+       
+    }
+	 public function store_import(Request $request){
+           if ($request->hasFile('import_file')) {
+			   $file = $request->file('import_file');
+			   $filename =  $file->getClientOriginalName();
+			 //  $profile_photo = $image->getClientOriginalName();
+				$destinationPath = public_path('/storage/galeryImages/');
+				$file->move($destinationPath, $filename);
+			    $file = fopen(public_path('/storage/galeryImages/').'/'.$filename, "r");
+				$i = 0;
+          while (($getData = fgetcsv($file, 10000, ",")) !== FALSE)
+           {
+			   if($i>0){
+				   $pre_enq = Enquiry::where('contact_no', $getData[4])->first();
+					if(empty($pre_enq)){
+						
+              $enquiry = Enquiry::create([
+                'name' => ucwords($getData[1]),
+                'business_name' => $getData[2],
+                'email' => $getData[3],
+                'contact_no' => $getData[4],
+               // 'subject' => $getData[10],
+                'address' => $getData[9],
+            ]);
+
+            $status = EnquiryStatus::where('status',ucwords( $getData[8]))->first();
+            $enquiry->enquiry_status()->associate($status);
+
+            $project = Project::where('name', $getData[5])->first();
+            $enquiry->project()->associate($project);
+
+            $configuration = Configuration::where('name', $getData[5])->first();
+            $enquiry->configuration()->associate($configuration);
+
+            $budget_range = BudgetRange::where('range', $getData[7])->first();
+            $enquiry->budget_range()->associate($budget_range);
+			if($getData[10]){
+				$insert_update  = DB::table('remarks')
+				->Insert(
+					['user_id' => 1,'lead_id' => $enquiry->id,"remarks"=>$getData[10],'created_by'=>NOW(),'updated_by'=>NOW()],
+				);
+				
+			}
+
+            $enquiry->save();
+			   }
+			 
+           }
+		   $i++;
+		   }
+      
+           fclose($file);  
+		   }
+		   return redirect(route('enquiries.index'));
+    }
+
+    /**
+     * Show the form for editing the specified resource.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function edit($id)
+    {
+        $enquiry = Enquiry::where('id', $id)->first();
+
+        if($enquiry->enquiry_status->id === 4) {
+            return redirect(route('enquiries.index'));
+        }
+
+        $enquiry_statuses = EnquiryStatus::paginate(3);
+        $projects = Project::all();
+        $configurations = Configuration::all();
+        $budget_ranges = BudgetRange::all();
+        $users = User::role(['Team Lead' , 'Executive'])->get();
+        $remarks = DB::table('remarks')->select('remarks.*', 'users.name')->leftJoin('users', 'remarks.user_id', '=', 'users.id')->where('lead_id',$id)->orderby('id','desc')->get();
+		//echo "<pre>"; print_r($remarks);exit;
+        return view('enquiries.edit', compact('enquiry', 'enquiry_statuses', 'projects', 'configurations', 'budget_ranges', 'users','remarks'));
+    }
+
+    /**
+     * Update the specified resource in storage.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function update(Request $request, $id)
+    {
+         $this->validate($request, [
+            'name' => 'required',
+            'contact_no' => 'required|regex:/^([0-9\s\-\+\(\)]*)$/|min:6',
+            'enquiry_status' => 'required',
+        ]); 
+
+        DB::beginTransaction();
+        try {
+			
+			$enquiry = Enquiry::where('id', $id)->first();
+			//echo "<pre>";print_r($enquiry);exit;
+
+			if(!empty($enquiry->assignedTo->id)){
+				$previous_assignee = User::where('id', $enquiry->assignedTo->id)->first();
+				$previous_assignee->update([
+					'no_of_enquiries_assigned' => ($previous_assignee->no_of_enquiries_assigned - 1),
+				]);
+			}
+            $enquiry->update([
+                'name' => ucwords($request->input('name')),
+                'business_name' => $request->input('business_name'),
+                'email' => $request->input('email'),
+                'contact_no' => $request->input('contact_no'),
+               // 'subject' => $request->input('subject'),
+                'address' => $request->input('address'),
+            ]);
+			
+            $status = EnquiryStatus::where('id', $request->input('enquiry_status'))->first();
+            $enquiry->enquiry_status()->associate($status);
+			if($request->input('project')){
+				$project = Project::where('id', $request->input('project'))->first();
+				$enquiry->project()->associate($project);
+			}
+			
+			if($request->input('configuration')){
+				$configuration = Configuration::where('id', $request->input('configuration'))->first();
+				$enquiry->configuration()->associate($configuration);
+			}
+			if($request->input('budget_range')){
+				$budget_range = BudgetRange::where('id', $request->input('budget_range'))->first();
+				$enquiry->budget_range()->associate($budget_range);
+			}
+			
+			if($request->input('assigned_to')){ 
+			$previous_assignee = User::where('id', $enquiry->assignedTo->id)->first();
+				$assignee = User::where('id', $request->input('assigned_to'))->first();
+				$enquiry->assignedTo()->associate($assignee);
+				$assignee->update([
+					'no_of_enquiries_assigned' => ($assignee->no_of_enquiries_assigned + 1),
+				]);
+				if($request->input('assigned_to') != $enquiry->assigned_to){
+				$insert_update  = DB::table('notifications')
+				->Insert(
+					['user_id' => $request->input('assigned_to'),'notification_text' => "New Lead has been assigned to you","status"=>0],
+				);
+				
+				$insert_update  = DB::table('activities')
+					->Insert(
+						['user' => $request->assigned_to,'activity_text' => "New Lead(s) has been assigned to ".$assignee->name],
+					);
+				}	
+				$insert_update  = DB::table('leads_transfer')
+				->Insert(
+					['lead_id' => $enquiry->id,'previous_user'=>$previous_assignee->id,'new_user'=>$request->input('assigned_to')],
+				);
+				
+			}
+			if($request->input('subject')){
+				$user =user::findorfail(auth()->user()->id);
+				$insert_update  = DB::table('remarks')
+				->Insert(
+					['user_id' => auth()->user()->id,'lead_id' => $id,"remarks"=>$request->input('subject'),'created_by'=>NOW(),'updated_by'=>NOW()],
+				);
+				$insert_update  = DB::table('notifications')
+				->Insert(
+					['user_id' => 1,'notification_text' => 'New Remark " '.$request->input('subject').' " has been added  by '.$user->name,"status"=>0]
+				);
+				$insert_update  = DB::table('activities')
+					->Insert(
+						['user' => $request->assigned_to,'activity_text' => "New Remark has been added by ".$user->name],
+					);
+				
+			}
+
+            $enquiry->save();
+        } catch (Exception $e) {
+            DB::rollBack();
+            return redirect()->back()->withErrors([
+                'db_error' => $e->getMessage(),
+            ]);
+        }
+        DB::commit();
+
+        return redirect(route('enquiries.index'));
+    }
+
+    public function updateStatus(Request $request, $id)
+    {
+        $this->validate($request, [
+            'project' => 'required',
+            'enquiry_status' => 'required',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $status = EnquiryStatus::where('id', $request->input('enquiry_status'))->first();
+            $project = Project::where('id', $request->input('project'))->first();
+            $enquiry = Enquiry::findorfail($id);
+            $enquiry->enquiry_status()->associate($status);
+            $enquiry->project()->associate($project);
+            $enquiry->save();
+        } catch (Exception $e) {
+            DB::rollBack();
+            return redirect(route('enquiries.show', ['id' => $id]))->withErrors([
+                'db_error' => $e->getMessage(),
+            ]);
+        }
+        DB::commit();
+
+        return redirect(route('enquiries.show', ['id' => $id]));
+    }
+
+    public function close($id)
+    {
+        $enquiry = Enquiry::findorfail($id);
+
+        $status = EnquiryStatus::where('id', 5)->first();
+        $enquiry->enquiry_status()->associate($status);
+        $enquiry->save();
+
+        $previous_assignee = User::where('id', $enquiry->assignedTo->id)->first();
+        $previous_assignee->update([
+            'no_of_enquiries_assigned' => ($previous_assignee->no_of_enquiries_assigned - 1),
+        ]);
+		
+		$insert_update  = DB::table('activities')
+		->Insert(
+			['user' =>  $enquiry->assignedTo->id,'activity_text' => "Lead(s) has been Closed by ".$previous_assignee->name],
+		);
+					
+				
+
+        $projects = Project::all();
+        $payment_modes = PaymentMode::all();
+        $configurations = Configuration::all();
+
+        return view('clients.create', compact('enquiry', 'projects', 'payment_modes', 'configurations'));
+    }
+
+    /**
+     * Remove the specified resource from storage.
+     *
+     * @param  int  $id
+     * @return \Illuminate\Http\Response
+     */
+    public function destroy(Request $request, $id)
+    {
+        $data = json_decode($request->getContent());
+
+        $enquiry = Enquiry::findorfail($id);
+        $status = EnquiryStatus::where('id', 4)->first();
+        $enquiry->update([
+            'is_lost' => true,
+        ]);
+        $previous_assignee = User::where('id', $enquiry->assignedTo->id)->first();
+        $previous_assignee->update([
+            'no_of_enquiries_assigned' => ($previous_assignee->no_of_enquiries_assigned - 1),
+        ]);
+        $enquiry->enquiry_status()->associate($status);
+        $enquiry->lost_remark = $data->lost_remark;
+        $enquiry->save();
+
+        return back();
+    }
+	public function export(Request $request) {
+		
+		if(auth()->user()->hasRole(['Admin']) == false && isset($request->code) == false ) {
+			$code = rand(100000,999999);
+			$code_admin = rand(100000,999999);
+			$insert_update  = DB::table('user_codes')
+				->updateOrInsert(
+					['user_id' => Auth::user()->id],
+					['code' => $code,'admin_code'=>$code_admin]
+				);
+			$user = User::findorfail(Auth::user()->id);
+			/* */
+			$info = array(
+						'name' => $user->name,
+						'code' => $code
+					);
+			$info_1 = array(
+						'name' => 'Admin',
+						'username' => $user->name,
+						'code' => $code_admin
+					);
+				Mail::send( 'mail_lead', $info, function ($message)
+				{
+					$message->to(Auth::user()->email, 'A2P Realtech Pvt. Ltd.')
+						->subject('2 Factor Authentication for export Leads');
+					$message->from('a2prealtechpvtltd@gmail.com', 'A2P Realtech Pvt. Ltd.');
+				});
+				/* $admin = User::findorfail(1);
+				$a_email= $admin->email; */
+				Mail::send( 'mail_leads_admin', $info_1, function ($message)
+				{
+					$message->to('adminrealtech@yopmail.com', 'A2P Realtech Pvt. Ltd.')
+						->subject('2 Factor Authentication for Export Leads');
+					$message->from('a2prealtechpvtltd@gmail.com', 'A2P Realtech Pvt. Ltd.');
+				});
+				
+				return view('enquiries.2fa');
+
+		}else{
+		if($request->code && $request->admin_code){
+			$data = DB::select('select * from user_codes where user_id ="'.Auth::user()->id.'" and code = "'.$request->code.'" and admin_code ="'.$request->admin_code.'"');
+			if($data){
+	
+				 // return view('enquiries.index');
+			}else{
+				return back()->withErrors([
+					'code' => 'The provided verification code do not match our records.',
+				]);
+			}
+		}	
+			
+        $fileName = 'exported_leads.csv';
+
+        header('Content-Type: application/csv; charset=UTF-8');
+		header('Content-Disposition: attachment; filename="' . $fileName . '";');
+
+
+        $columns = array('Name', 'Business Name', 'Email', 'Mobile','Project','Configuration', 'Budget range','Status','Address','Remarks');
+		if(auth()->user()->hasRole(['Admin'])) {
+			$data = DB::select('select enquiries.name as username,business_name,email,contact_no, projects.name as project_name , configurations.name as configuration_name , budget_ranges.range as price_range, enquiry_statuses.status,enquiries.address, enquiries.subject as remarks from enquiries 
+			Left Join projects on enquiries.project_id = projects.id 
+			LEFT JOIN configurations on enquiries.configuration_id = configurations.id 
+			LEFT JOIN budget_ranges on enquiries.budget_range_id = budget_ranges.id
+			LEFT JOIN enquiry_statuses on enquiries.enquiry_status_id = enquiry_statuses.id
+			');
+		}else{
+			
+			$data = DB::select('select enquiries.name as username,business_name,email,contact_no, projects.name as project_name , configurations.name as configuration_name , budget_ranges.range as price_range, enquiry_statuses.status,enquiries.address, enquiries.subject as remarks from enquiries 
+			Left Join projects on enquiries.project_id = projects.id 
+			LEFT JOIN configurations on enquiries.configuration_id = configurations.id 
+			LEFT JOIN budget_ranges on enquiries.budget_range_id = budget_ranges.id
+			LEFT JOIN enquiry_statuses on enquiries.enquiry_status_id = enquiry_statuses.id where enquiries.assigned_to = "'.auth()->user()->id.'"
+			');
+
+		}
+		/*LEFT JOIN budget_ranges on enquiries.budget_range_id = budget_ranges.id */
+		    ob_end_clean();
+
+            $file = fopen('php://output', 'w');
+            fputcsv($file, $columns);
+
+            foreach ($data as $d) {
+
+                fputcsv($file, array($d->username, $d->business_name,$d->email, $d->contact_no,$d->project_name,$d->configuration_name,$d->price_range,$d->status,$d->address,$d->remarks));
+            }
+
+            fclose($file);
+			   // ob_flush();
+    
+    // use exit to get rid of unexpected output afterward
+    exit();
+		}
+
+	}
+}

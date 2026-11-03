@@ -1,0 +1,13 @@
+RewriteEngine On
+
+# Force HTTPS and Non-WWW
+RewriteCond %{HTTPS} off [OR]
+RewriteCond %{HTTP_HOST} ^www\. [NC]
+RewriteRule ^(.*)$ https://a2prealtech.com/$1 [L,R=301]
+
+#Product Category Rule
+RewriteRule ^/?service_detail/(.*).php$ service_detail.php?id=$1 [L]
+RewriteRule ^/?service_list/(.*).php$ service_list.php?id=$1 [L]
+RewriteRule ^/?blog_detail/(.*).php$ blog_detail.php?id=$1 [L]
+RewriteRule ^/?career_detail/(.*).php$ career_detail.php?id=$1 [L]
+RewriteRule ^/?media-gallery-detail/(.*).php$ media-gallery-detail.php?id=$1 [L]

@@ -1,0 +1,7 @@
+ALTER TABLE invoice 
+ADD commission_1_new DECIMAL(8,2) NULL AFTER commission_1_tds,
+ADD commission_2_new DECIMAL(8,2) NULL AFTER commission_2_tds,
+ADD commission_3_new DECIMAL(8,2) NULL AFTER commission_3_tds,
+ADD commission_4_new DECIMAL(8,2) NULL AFTER commission_4_tds,
+ADD commission_5_new DECIMAL(8,2) NULL AFTER commission_5_tds,
+ADD commission_6_new DECIMAL(8,2) NULL AFTER commission_6_tds;

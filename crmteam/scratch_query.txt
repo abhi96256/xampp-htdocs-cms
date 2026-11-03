@@ -1,0 +1,7 @@
+ALTER TABLE invoice 
+ADD commission_1_percentage DECIMAL(8,2) NULL AFTER commission_1_name,
+ADD commission_2_percentage DECIMAL(8,2) NULL AFTER commission_2_name,
+ADD commission_3_percentage DECIMAL(8,2) NULL AFTER commission_3_name,
+ADD commission_4_percentage DECIMAL(8,2) NULL AFTER commission_4_name,
+ADD commission_5_percentage DECIMAL(8,2) NULL AFTER commission_5_name,
+ADD commission_6_percentage DECIMAL(8,2) NULL AFTER commission_6_name;

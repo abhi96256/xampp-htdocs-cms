@@ -1,0 +1,45 @@
+backup.zip
+admin/admin.zip
+temp_backup/
+upload/*.pdf
+*.zip
+*.rar
+*.7z
+node_modules/
+vendor/
+!admin/vendor/phpmailer/phpmailer/src/
+.DS_Store
+Thumbs.db
+
+# Firebase & Security
+superadmin/firebase-service-account.json
+fcm_debug.txt
+save_log.txt
+mail_error_log.txt
+mail_debug.log
+save_log.txt
+
+# Temp & Garbage Files
+backup.zip
+*.zip
+*.rar
+*.7z
+*.sql
+*.log
+tmp_list_dbs.php
+tmp_list_tables.php
+test_otp.php
+query
+mail2.php
+contact(1).php
+mail.php
+enquiry-form.html
+enquirymodel.jpg
+career.png
+
+# Admin/Uploads (Optionally keep if needed, but normally avoided)
+upload/
+admin/admin.zip
+temp_backup/
+
+.env

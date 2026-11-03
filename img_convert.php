@@ -1,0 +1,1 @@
+<?php $im = imagecreatefrompng('upload/080325100432logo.png'); $bg = imagecreatetruecolor(imagesx($im), imagesy($im)); imagefill($bg, 0, 0, imagecolorallocate($bg, 255, 255, 255)); imagecopy($bg, $im, 0, 0, 0, 0, imagesx($im), imagesy($im)); imagejpeg($bg, 'upload/og_logo.jpg', 100); imagedestroy($bg); imagedestroy($im); ?>
